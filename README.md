@@ -27,7 +27,7 @@ Generation uses **temperature sampling with top-k filtering** (default: k=8, tem
 ## 🗂️ Project Structure
 
 ```
-Quote Predictor/
+Next-Quote-Predictor/
 ├── app.py                  # Streamlit web application
 ├── training.ipynb          # Model training notebook (Kaggle/GPU)
 ├── next_quote_model.keras  # Trained Transformer model
