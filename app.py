@@ -2,20 +2,21 @@ import streamlit as st
 import json
 import pickle
 import numpy as np
-from tensorflow.keras.models import load_model
+import onnxruntime as ort
 from tensorflow.keras.preprocessing.sequence import pad_sequences
-from keras.config import enable_unsafe_deserialization
-
-enable_unsafe_deserialization()
-
-def last_token(x):
-    return x[:, -1, :]
 
 @st.cache_resource
 def load_all():
-    model = load_model(
-        "next_quote_model.keras",
-        custom_objects={"last_token": last_token}
+
+    session_options = ort.SessionOptions()
+    session_options.graph_optimization_level = (
+        ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    )
+
+    session = ort.InferenceSession(
+        "next_quote_model.onnx",
+        sess_options=session_options,
+        providers=["CPUExecutionProvider"]
     )
 
     with open("config.json", "r") as f:
@@ -24,61 +25,125 @@ def load_all():
     with open("tokenizer.pkl", "rb") as f:
         tokenizer = pickle.load(f)
 
-    return model, tokenizer, config["max_len"]
+    return session, tokenizer, config["max_len"]
 
-model, tokenizer, max_len = load_all()
 
-id_to_word = {idx: word for word, idx in tokenizer.word_index.items()}
+session, tokenizer, max_len = load_all()
+
+input_name = session.get_inputs()[0].name
+output_name = session.get_outputs()[0].name
+
+id_to_word = {
+    idx: word
+    for word, idx in tokenizer.word_index.items()
+}
 
 def sample_with_temperature(preds, temperature=0.7, top_k=8):
 
+    preds = np.asarray(preds).astype(np.float64)
+
     preds = np.log(preds + 1e-8) / temperature
-    exp_preds = np.exp(preds)
+    exp_preds = np.exp(preds - np.max(preds))
     probs = exp_preds / np.sum(exp_preds)
 
     if top_k is not None:
-        top_indices = np.argpartition(probs, -top_k)[-top_k:]
+
+        top_indices = np.argpartition(
+            probs,
+            -top_k
+        )[-top_k:]
+
         top_probs = probs[top_indices]
         top_probs /= top_probs.sum()
-        next_token = np.random.choice(top_indices, p=top_probs)
+
+        next_token = np.random.choice(
+            top_indices,
+            p=top_probs
+        )
+
     else:
-        next_token = np.random.choice(len(probs), p=probs)
 
-    return next_token
+        next_token = np.random.choice(
+            len(probs),
+            p=probs
+        )
 
-def generate_quote(seed_text, next_tokens=30, temperature=0.7):
+    return int(next_token)
+
+def generate_quote(
+    seed_text,
+    next_tokens=30,
+    temperature=0.7
+):
 
     start_token = tokenizer.word_index.get("<START>")
     end_token = tokenizer.word_index.get("<END>")
 
-    token_list = [start_token] + tokenizer.texts_to_sequences([seed_text])[0]
-    current_tokens = token_list[-(max_len-1):]
+    seed_tokens = tokenizer.texts_to_sequences(
+        [seed_text]
+    )[0]
+
+    token_list = [start_token] + seed_tokens
+
+    current_tokens = token_list[-(max_len - 1):]
 
     output_words = seed_text.split()
 
     for _ in range(next_tokens):
 
-        padded = pad_sequences([current_tokens], maxlen=max_len-1, padding='pre')
-        preds = model.predict(padded, verbose=0)[0]
+        padded = pad_sequences(
+            [current_tokens],
+            maxlen=max_len - 1,
+            padding="pre"
+        )
 
-        next_token_id = sample_with_temperature(preds, temperature)
+        padded = padded.astype(np.int32)
+
+        preds = session.run(
+            [output_name],
+            {input_name: padded}
+        )[0]
+
+        preds = preds[0]
+
+        next_token_id = sample_with_temperature(
+            preds,
+            temperature=temperature
+        )
 
         if next_token_id == end_token:
             break
 
-        next_word = id_to_word.get(next_token_id, "")
-        output_words.append(next_word)
+        next_word = id_to_word.get(
+            next_token_id,
+            ""
+        )
+
+        if next_word:
+            output_words.append(next_word)
 
         current_tokens.append(next_token_id)
-        current_tokens = current_tokens[-(max_len-1):]
+
+        current_tokens = current_tokens[-(max_len - 1):]
 
     return " ".join(output_words)
 
+st.set_page_config(
+    page_title="Next Quote Prediction",
+    page_icon="🧠",
+    layout="centered"
+)
+
 st.title("🧠 Next Quote Prediction")
 
-st.write("Enter a text prompt and the model will generate the rest of the quote.")
+st.write(
+    "Enter a text prompt and the model will generate the rest of the quote."
+)
 
-seed_text = st.text_input("Enter starting text:", "beauty is")
+seed_text = st.text_input(
+    "Enter starting text:",
+    value="beauty is"
+)
 
 temperature = st.slider(
     "Creativity (Temperature)",
@@ -97,12 +162,28 @@ length = st.slider(
 
 if st.button("Generate Quote"):
 
-    if seed_text.strip() == "":
-        st.warning("Please enter some text")
+    if not seed_text.strip():
+
+        st.warning(
+            "Please enter some text."
+        )
 
     else:
-        with st.spinner("Generating..."):
-            result = generate_quote(seed_text, length, temperature)
 
-        st.subheader("Generated Quote")
-        st.success(result + ".")
+        with st.spinner(
+            "Generating quote..."
+        ):
+
+            result = generate_quote(
+                seed_text,
+                next_tokens=length,
+                temperature=temperature
+            )
+
+        st.subheader(
+            "Generated Quote"
+        )
+
+        st.success(
+            result + "."
+        )

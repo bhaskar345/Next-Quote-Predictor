@@ -2,10 +2,6 @@
 
 > A Transformer-based deep learning app that generates inspirational quotes from a seed phrase — powered by a custom-trained model and served with a Streamlit UI.
 
----
-
-[Download Model](https://drive.google.com/file/d/15R92LBPEkgj49AvgKYLNeP1GOp35OX0e/view?usp=sharing)
-
 
 ## 🧠 Model Architecture
 
